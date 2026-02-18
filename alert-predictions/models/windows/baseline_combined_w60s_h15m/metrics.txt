@@ -1,0 +1,18 @@
+pr_auc=0.5
+threshold_policy=precision
+target_precision=0.8
+threshold=0.30443991971463924
+confusion_matrix=
+[[9 2]
+ [0 2]]
+
+classification_report=
+              precision    recall  f1-score   support
+
+           0     1.0000    0.8182    0.9000        11
+           1     0.5000    1.0000    0.6667         2
+
+    accuracy                         0.8462        13
+   macro avg     0.7500    0.9091    0.7833        13
+weighted avg     0.9231    0.8462    0.8641        13
+

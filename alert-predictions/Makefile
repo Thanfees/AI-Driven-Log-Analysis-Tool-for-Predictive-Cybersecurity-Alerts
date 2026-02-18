@@ -24,6 +24,9 @@ help:
 RAW_LOG := raw_logs/linux/synth_80k_loanom.log
 MODEL_DIR := models/linux/baseline_combined_w60s_h15m
 PRED_OUT := outputs/linux/synth_80k_loanom.log_predictions_calibrated.csv
+WINDOWS_LOG := raw_logs/windows/Windows.log
+WINDOWS_CHUNK_DIR := raw_logs/windows/chunks
+WINDOWS_SPLIT_PARTS := 20
 
 gen-synth:
 	$(ACTIVATE); python scripts/generate_synthetic_linux_log.py \
@@ -58,16 +61,22 @@ train-mac:
 
 # ─── Windows Pipeline ────────────────────────────────────────────
 train-windows:
-	$(ACTIVATE); python scripts/00_run_pipeline.py \
+	$(ACTIVATE); RAW_DIR=raw_logs/windows; \
+	if [ -f "$(WINDOWS_LOG)" ]; then \
+		./scripts/split_windows_log.sh "$(WINDOWS_LOG)" $(WINDOWS_SPLIT_PARTS); \
+		RAW_DIR="$(WINDOWS_CHUNK_DIR)"; \
+	fi; \
+	python scripts/00_run_pipeline.py \
 		--os windows \
-		--raw-dir raw_logs/windows \
+		--raw-dir $$RAW_DIR \
 		--converted-dir data/windows/raw_csv \
 		--window 60s \
 		--horizon-min 15 \
 		--use-trends \
-		--target-precision 0.80 \
-		--min-lines 5 \
-		--k-confirm 3
+		--target-precision 0.92 \
+		--min-lines 8 \
+		--k-confirm 3 \
+		--recursive
 
 # ─── All Platforms ───────────────────────────────────────────────
 train-all: train train-mac train-windows

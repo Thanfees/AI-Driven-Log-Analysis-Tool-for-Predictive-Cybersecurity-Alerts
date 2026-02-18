@@ -75,6 +75,14 @@ python scripts/00_run_pipeline.py --os mac --raw-dir raw_logs/mac \
 # Windows
 python scripts/00_run_pipeline.py --os windows --raw-dir raw_logs/windows \
     --window 60s --horizon-min 15 --use-trends --target-precision 0.80
+
+# For very large Windows logs
+# 1) Optional: split into chunks to reduce per-file memory
+bash scripts/split_windows_log.sh raw_logs/windows/Windows.log 20
+# 2) Run the pipeline (it will recurse through the chunks folder)
+python scripts/00_run_pipeline.py --os windows --raw-dir raw_logs/windows/chunks \
+    --window 60s --horizon-min 15 --use-trends --target-precision 0.92 \
+    --min-lines 8 --k-confirm 3 --recursive
 ```
 
 ### Makefile Targets

@@ -4,21 +4,21 @@
 
 Supports Windows CBS (Component-Based Servicing) and CSI (Component
 Servicing Infrastructure) log formats commonly found in:
-  - C:\\Windows\\Logs\\CBS\\CBS.log
-  - C:\\Windows\\Logs\\DISM\\dism.log
+  - C:\Windows\Logs\CBS\CBS.log
+  - C:\Windows\Logs\DISM\dism.log
 
 Format: "2016-09-28 04:30:30, Info  CBS  Starting TrustedInstaller..."
 
 Usage:
     # Single file
-    python src/windows/pipeline/01_convert_log_to_csv.py \\
-        --log-path raw_logs/windows/windows20k.log \\
+    python src/windows/pipeline/01_convert_log_to_csv.py \
+        --log-path raw_logs/windows/windows20k.log \
         --output data/windows/raw_csv/windows20k.csv
 
     # Directory
-    python src/windows/pipeline/01_convert_log_to_csv.py \\
-        --log-path raw_logs/windows \\
-        --output-dir data/windows/raw_csv \\
+    python src/windows/pipeline/01_convert_log_to_csv.py \
+        --log-path raw_logs/windows \
+        --output-dir data/windows/raw_csv \
         --recursive
 """
 
@@ -27,8 +27,6 @@ import logging
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
-
-import pandas as pd
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -57,71 +55,72 @@ except ImportError:
 logger = get_logger(__name__)
 
 
-def parse_log(
-    path: Path,
-    encoding: str = "utf-8-sig",
-    errors: str = "replace"
-) -> pd.DataFrame:
+def iter_rows_from_log(path: Path, encoding: str, errors: str):
     """
-    Parse a Windows CBS/CSI log file and extract structured fields.
-
-    Handles BOM-prefixed UTF-8 files and \\r\\n line endings common
-    in Windows log files.
-
-    Args:
-        path: Path to the log file
-        encoding: File encoding (default: utf-8-sig to handle BOM)
-        errors: Error handling for encoding issues (default: replace)
-
-    Returns:
-        DataFrame with columns: line_no, timestamp, host, process, pid, message, raw
+    Stream rows from a Windows CBS/CSI log file (memory-safe).
+    Yields dicts with the expected CSV columns.
     """
-    rows = []
-
-    try:
-        content = path.read_text(encoding=encoding, errors=errors)
-    except Exception as e:
-        logger.error(f"Failed to read file {path}: {e}")
-        raise
-
-    # Normalize line endings
-    content = content.replace("\r\n", "\n").replace("\r", "\n")
-
     last_timestamp = ""
     last_proc = ""
 
-    for line_no, line in enumerate(content.splitlines(), start=1):
-        line = line.strip()
-        if not line:
-            continue
+    with path.open("r", encoding=encoding, errors=errors, newline="") as f:
+        for line_no, raw_line in enumerate(f, start=1):
+            line = raw_line.rstrip("\r\n")
+            if not line:
+                continue
 
-        match = WINDOWS_LOG_PATTERN.match(line)
-        if match:
-            last_timestamp = match.group("ts").strip()
-            last_proc = match.group("proc").strip()
-            rows.append({
-                "line_no": line_no,
-                "timestamp": last_timestamp,
-                "host": "localhost",  # Windows CBS logs don't include hostname
-                "process": last_proc,
-                "pid": "",
-                "message": match.group("msg").strip(),
-                "raw": line,
-            })
-        else:
-            # Continuation line (e.g., CSIPERF:TXCOMMIT;200)
-            # Attach to previous timestamp/process
-            rows.append({
-                "line_no": line_no,
-                "timestamp": last_timestamp,
-                "host": "localhost",
-                "process": last_proc,
-                "pid": "",
-                "message": line,
-                "raw": line,
-            })
+            match = WINDOWS_LOG_PATTERN.match(line)
+            if match:
+                last_timestamp = match.group("ts").strip()
+                last_proc = match.group("proc").strip()
+                yield {
+                    "line_no": line_no,
+                    "timestamp": last_timestamp,
+                    "host": "localhost",  # Windows CBS logs don't include hostname
+                    "process": last_proc,
+                    "pid": "",
+                    "message": match.group("msg").strip(),
+                    "raw": line,
+                }
+            else:
+                # Continuation line (e.g., CSIPERF:TXCOMMIT;200)
+                yield {
+                    "line_no": line_no,
+                    "timestamp": last_timestamp,
+                    "host": "localhost",
+                    "process": last_proc,
+                    "pid": "",
+                    "message": line.strip(),
+                    "raw": line,
+                }
 
-    return pd.DataFrame(rows)
+
+def write_csv_stream(rows_iter, out_path: Path, chunk_rows: int = 500_000) -> int:
+    """
+    Write rows from an iterator to CSV in chunks to keep RAM low.
+
+    Returns total rows written.
+    """
+    import csv
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    headers = ["line_no", "timestamp", "host", "process", "pid", "message", "raw"]
+    count = 0
+    buffer: list[dict] = []
+
+    with out_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        for row in rows_iter:
+            buffer.append(row)
+            count += 1
+            if len(buffer) >= chunk_rows:
+                writer.writerows(buffer)
+                buffer.clear()
+        if buffer:
+            writer.writerows(buffer)
+
+    return count
 
 
 def compute_default_output(
@@ -217,6 +216,12 @@ def main() -> None:
         default="replace",
         choices=["strict", "ignore", "replace"]
     )
+    parser.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=500_000,
+        help="Rows per write chunk to limit RAM (streaming mode).",
+    )
     args = parser.parse_args()
 
     log_path = Path(args.log_path)
@@ -230,11 +235,13 @@ def main() -> None:
         count = 0
         for f in glob_logs(log_path, recursive=args.recursive):
             out_path = compute_default_output(f, str(out_base), root=log_path)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            df = parse_log(f, args.encoding, args.errors)
-            df.to_csv(out_path, index=False)
+            rows_written = write_csv_stream(
+                iter_rows_from_log(f, args.encoding, args.errors),
+                out_path,
+                chunk_rows=args.chunk_rows,
+            )
             count += 1
-            logger.info(f"[+] {f} -> {out_path} ({len(df)} rows)")
+            logger.info(f"[+] {f} -> {out_path} ({rows_written} rows)")
         logger.info(f"✅ Converted {count} log file(s) to CSV under {out_base}")
         return
 
@@ -244,11 +251,12 @@ def main() -> None:
     else:
         output_path = compute_default_output(log_path, args.output_dir)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    df = parse_log(log_path, args.encoding, args.errors)
-    df.to_csv(output_path, index=False)
-    logger.info(f"✅ Wrote {len(df)} rows to {output_path}")
+    rows_written = write_csv_stream(
+        iter_rows_from_log(log_path, args.encoding, args.errors),
+        output_path,
+        chunk_rows=args.chunk_rows,
+    )
+    logger.info(f"✅ Wrote {rows_written} rows to {output_path}")
 
 
 if __name__ == "__main__":

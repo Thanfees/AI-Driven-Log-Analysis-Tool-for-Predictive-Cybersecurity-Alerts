@@ -36,12 +36,17 @@ fi
 
 raw_base="$TARGET_DIR/raw_logs"
 mkdir -p "$raw_base"
+# If you want per-OS subfolders (raw_logs/linux etc), export USE_OS_SUBDIRS=1.
+USE_OS_SUBDIRS="${USE_OS_SUBDIRS:-0}"
 
 for entry in "${DATASETS[@]}"; do
   os="${entry%%|*}"
   url="${entry#*|}"
-  os_dir="$raw_base/$os"
-  mkdir -p "$os_dir"
+  dest_dir="$raw_base"
+  if [[ "$USE_OS_SUBDIRS" == "1" ]]; then
+    dest_dir="$raw_base/$os"
+    mkdir -p "$dest_dir"
+  fi
 
   log "Downloading $os logs from $url"
   archive="$tmpdir/${os}.tar.gz"
@@ -51,10 +56,11 @@ for entry in "${DATASETS[@]}"; do
   mkdir -p "$extract_dir"
   tar -xzf "$archive" -C "$extract_dir"
 
-  log "Placing $os logs into $os_dir"
+  log "Placing $os logs into $dest_dir"
+  mkdir -p "$dest_dir"
   # Move all files (keep original filenames); overwrite if present.
   find "$extract_dir" -type f -print0 | while IFS= read -r -d '' file; do
-    mv -f "$file" "$os_dir/"
+    mv -f "$file" "$dest_dir/"
   done
 done
 
