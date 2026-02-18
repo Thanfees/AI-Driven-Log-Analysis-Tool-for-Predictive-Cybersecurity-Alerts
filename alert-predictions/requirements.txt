@@ -1,0 +1,12 @@
+# Log-Forecast Dependencies
+# Pin versions for reproducibility and stability
+
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<2.0.0
+scikit-learn>=1.3.0,<2.0.0
+joblib>=1.3.0,<2.0.0
+matplotlib>=3.7.0,<4.0.0
+tensorflow>=2.15.0,<3.0.0
+
+# Development dependencies
+pytest>=7.4.0

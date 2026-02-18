@@ -1,0 +1,941 @@
+# Log Forecast — Linux Early Warning System
+## Comprehensive Project Report
+
+---
+
+## 📋 Table of Contents
+
+1. [Project Overview](#project-overview)
+2. [System Architecture](#system-architecture)
+3. [Prerequisites](#prerequisites)
+4. [Installation & Setup](#installation--setup)
+5. [Project Structure](#project-structure)
+6. [Core Components](#core-components)
+7. [Usage Guide](#usage-guide)
+8. [Advanced Features](#advanced-features)
+9. [Configuration Parameters](#configuration-parameters)
+10. [Troubleshooting](#troubleshooting)
+
+---
+
+## 📖 Project Overview
+
+**Log Forecast** is an intelligent early warning system designed to predict anomalies in Linux system logs before they occur. The system uses machine learning (Logistic Regression with TF-IDF text features and numeric statistics) to analyze log patterns and provide proactive alerts.
+
+### Key Features
+
+- **Early Warning Prediction**: Predicts anomalies 15-30 minutes before they occur
+- **Low False Positive Rate**: Configurable precision targeting (60-80%) with K-consecutive confirmation
+- **Real-time Monitoring**: Live log analysis with streaming inference
+- **Batch Processing**: Train on historical logs and run batch predictions
+- **Synthetic Data Generation**: Built-in synthetic log generator for testing
+- **Flexible Windowing**: Configurable time windows (30s, 60s, 5min, etc.)
+- **Trend Analysis**: Optional rolling statistics and differential features
+
+### Use Cases
+
+- **System Monitoring**: Proactive detection of system failures
+- **Security**: Early warning for authentication failures, break-in attempts
+- **Performance**: Predict resource exhaustion (OOM, disk errors)
+- **DevOps**: Automated alerting for production systems
+
+---
+
+## 🏗️ System Architecture
+
+```mermaid
+graph TD
+    A[Raw Logs] -->|Convert| B[CSV Format]
+    B -->|Windowize| C[Time Windows]
+    C -->|Label Rules| D[Labeled Windows]
+    D -->|Trend Features| E[Enhanced Features]
+    E -->|Future Labels| F[Training Dataset]
+    F -->|Train| G[ML Model]
+    G -->|Inference| H[Predictions]
+    I[Real-time Logs] -->|Stream| J[Realtime Inference]
+    G -->|Load Model| J
+    J -->|Alerts| K[Early Warnings]
+```
+
+### Pipeline Stages
+
+1. **Log Conversion**: Parse syslog format → structured CSV
+2. **Windowization**: Aggregate logs into time windows (e.g., 60s buckets)
+3. **Rule-based Labeling**: Detect current anomalies using keyword patterns
+4. **Trend Features** (optional): Add rolling statistics and differentials
+5. **Future Labeling**: Create early-warning targets (predict H minutes ahead)
+6. **Model Training**: Train Logistic Regression with TF-IDF + numeric features
+7. **Threshold Calibration**: Optimize for target precision and alert budget
+8. **Inference**: Batch or real-time prediction with K-consecutive confirmation
+
+---
+
+## ✅ Prerequisites
+
+### System Requirements
+
+- **Operating System**: Linux (Ubuntu/Debian recommended)
+- **Python**: 3.8 or higher
+- **Memory**: Minimum 4GB RAM (8GB+ recommended for large datasets)
+- **Disk Space**: 1GB+ for models and processed data
+
+### Python Dependencies
+
+```
+pandas
+numpy
+scikit-learn
+joblib
+matplotlib
+tensorflow
+```
+
+---
+
+## 🚀 Installation & Setup
+
+### Step 1: Activate Virtual Environment
+
+The project uses a virtual environment located at a specific path:
+
+```bash
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+```
+
+> **Note**: The path contains spaces, so quotes are required.
+
+### Step 2: Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Step 3: Verify Installation
+
+```bash
+python --version  # Should be 3.8+
+python -c "import pandas, sklearn, joblib; print('✅ Dependencies OK')"
+```
+
+---
+
+## 📁 Project Structure
+
+```
+log-forecast/
+├── raw_logs/              # Input log files
+│   ├── linux.log
+│   ├── synth_80k_loanom.log
+│   └── synthetic_60k.log
+├── data/
+│   └── linux/
+│       ├── raw_csv/       # Converted CSV logs
+│       ├── processed/     # Windowized data
+│       └── labeled/       # Labeled + future datasets
+├── models/
+│   └── linux/             # Trained models
+│       └── baseline_combined_w60s_h15m/
+│           ├── final_model.joblib
+│           ├── threshold.txt
+│           ├── metadata.json
+│           └── metrics.txt
+├── outputs/
+│   └── linux/             # Prediction results
+├── scripts/               # High-level automation scripts
+│   ├── 00_run_linux_pipeline.py
+│   ├── generate_synthetic_linux_log.py
+│   ├── calibrate_threshold.py
+│   ├── run_linux_single.sh
+│   └── realtime_runner.sh
+├── src/
+│   └── linux/
+│       ├── pipeline/      # Training pipeline modules
+│       │   ├── step_01_convert_log_to_csv.py
+│       │   ├── 01_windowize.py
+│       │   ├── 02_label_windows_from_rules.py
+│       │   ├── 02b_add_trend_features.py
+│       │   ├── 03_make_future_labels.py
+│       │   ├── 04_train_baseline.py
+│       │   ├── 05_infer_baseline.py
+│       │   └── 06_train_seq_gru.py
+│       └── realtime/      # Real-time inference
+│           ├── 07_realtime_collector.py
+│           └── 08_realtime_infer_baseline.py
+├── Makefile               # Convenient make targets
+├── README.md              # Quick start guide
+└── requirements.txt       # Python dependencies
+```
+
+---
+
+## 🔧 Core Components
+
+### 1. Synthetic Log Generator
+
+**Purpose**: Generate realistic Linux syslog data for testing
+
+**Script**: [scripts/generate_synthetic_linux_log.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/scripts/generate_synthetic_linux_log.py)
+
+**Features**:
+- Configurable log volume (lines)
+- Adjustable anomaly rate (0.0015 = 0.15% anomalies)
+- Realistic process names (CRON, sshd, systemd, etc.)
+- Anomaly types: auth failures, segfaults, firewall blocks, OOM kills, kernel panics
+
+**Example**:
+```bash
+python scripts/generate_synthetic_linux_log.py \
+  --lines 80000 \
+  --anomaly-frac 0.0015 \
+  --out raw_logs/synth_80k_loanom.log
+```
+
+### 2. Full Pipeline Runner
+
+**Purpose**: End-to-end training on multiple log files
+
+**Script**: [scripts/00_run_linux_pipeline.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/scripts/00_run_linux_pipeline.py)
+
+**Workflow**:
+1. Auto-converts [.log](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/raw_logs/linux.log) files to CSV
+2. Windowizes all logs
+3. Labels windows with rule-based anomaly detection
+4. Optionally adds trend features
+5. Creates future labels (early warning targets)
+6. Trains a single combined model
+7. Runs inference on all files
+
+**Key Parameters**:
+- `--window`: Window size (e.g., `60s`, `5min`)
+- `--horizon-min`: Prediction horizon in minutes (e.g., `15`)
+- `--use-trends`: Enable rolling statistics features
+- `--target-precision`: Threshold selection target (e.g., `0.80`)
+- `--min-lines`: Filter windows with fewer lines (reduces noise)
+- `--k-confirm`: Consecutive confirmations required for alerts
+
+### 3. Threshold Calibration
+
+**Purpose**: Optimize decision threshold for alert budget
+
+**Script**: [scripts/calibrate_threshold.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/scripts/calibrate_threshold.py)
+
+**How it works**:
+- Analyzes validation scores from trained model
+- Searches for threshold that produces target alerts/day
+- Balances precision and recall
+- Saves calibrated threshold to `threshold.txt`
+
+**Example**:
+```bash
+python scripts/calibrate_threshold.py \
+  --model-dir models/linux/baseline_combined_w60s_h15m \
+  --k-confirm 3 \
+  --target-alerts-per-day 5
+```
+
+### 4. Real-time Inference
+
+**Purpose**: Live monitoring of system logs
+
+**Script**: [src/linux/realtime/08_realtime_infer_baseline.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/src/linux/realtime/08_realtime_infer_baseline.py)
+
+**Features**:
+- Tails live log files (like `tail -F`)
+- Parses syslog format in real-time
+- Maintains rolling window state
+- Computes trend features on-the-fly
+- K-consecutive confirmation
+- Outputs predictions to CSV
+
+**Wrapper Script**: [scripts/realtime_runner.sh](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/scripts/realtime_runner.sh)
+- Replays a log file at configurable speed
+- Simulates real-time environment for testing
+
+---
+
+## 📚 Usage Guide
+
+### Quick Start (Makefile)
+
+The easiest way to run the entire demo:
+
+```bash
+# Activate virtual environment first
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+
+# View available targets
+make help
+
+# Run complete demo (generate → train → calibrate → infer → realtime)
+make demo
+```
+
+**Individual Makefile Targets**:
+
+```bash
+make gen-synth    # Generate synthetic log
+make train        # Train model
+make calibrate    # Calibrate threshold
+make infer        # Run batch inference
+make realtime     # Run realtime demo
+```
+
+---
+
+### Method 1: Full Pipeline (Multiple Files)
+
+**Use Case**: Train on multiple log files, create a combined model
+
+```bash
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+
+python scripts/00_run_linux_pipeline.py \
+  --raw-dir raw_logs \
+  --converted-dir data/linux/raw_csv \
+  --window 60s \
+  --horizon-min 15 \
+  --use-trends \
+  --target-precision 0.80 \
+  --min-lines 5 \
+  --k-confirm 3 \
+  --recursive
+```
+
+**Parameters Explained**:
+- `--raw-dir`: Directory containing [.log](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/raw_logs/linux.log) or `.csv` files
+- `--window 60s`: Aggregate logs into 60-second windows
+- `--horizon-min 15`: Predict anomalies 15 minutes ahead
+- `--use-trends`: Add rolling mean/sum/diff features
+- `--target-precision 0.80`: Aim for 80% precision (fewer false positives)
+- `--min-lines 5`: Ignore windows with < 5 log lines
+- `--k-confirm 3`: Require 3 consecutive positive predictions
+- `--recursive`: Search subdirectories for logs
+
+**Output**:
+- Model: `models/linux/baseline_combined_w60s_h15m/`
+- Predictions: `outputs/linux/*.csv`
+
+---
+
+### Method 2: Single File Pipeline
+
+**Use Case**: Quick training and inference on one log file
+
+```bash
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+
+bash scripts/run_linux_single.sh \
+  -i raw_logs/synth_80k_loanom.log \
+  -w 60s \
+  -H 15 \
+  -T \
+  -p 0.8 \
+  -l 5 \
+  -k 3
+```
+
+**Flags**:
+- `-i`: Input file (`.log` or `.csv`)
+- `-w`: Window size (e.g., `60s`, `5min`)
+- `-H`: Horizon in minutes
+- `-T`: Use trend features (flag)
+- `-p`: Target precision (0.60-0.90)
+- `-l`: Minimum lines per window
+- `-k`: K-consecutive confirmations
+
+**Output**:
+- Model: `models/linux/baseline_single/`
+- Predictions: `outputs/linux/<filename>_predictions.csv`
+
+---
+
+### Method 3: Real-time Monitoring
+
+#### Option A: Replay Demo (Testing)
+
+```bash
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+
+bash scripts/realtime_runner.sh \
+  -l raw_logs/synth_80k_loanom.log \
+  -m models/linux/baseline_combined_w60s_h15m \
+  -o outputs/linux/realtime_demo.csv \
+  -w 60 \
+  -k 3 \
+  -r 50 \
+  -P
+```
+
+**Flags**:
+- `-l`: Log file to replay
+- `-m`: Trained model directory
+- `-o`: Output predictions CSV
+- `-w`: Window seconds
+- `-k`: K-consecutive confirmations
+- `-r`: Replay rate (lines/second)
+- `-P`: Print verbose output (each window's score)
+
+#### Option B: Live System Logs
+
+```bash
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+
+python src/linux/realtime/08_realtime_infer_baseline.py \
+  --log-file /var/log/syslog \
+  --model-dir models/linux/baseline_combined_w60s_h15m \
+  --out outputs/linux/realtime_predictions.csv \
+  --window-sec 60 \
+  --k-confirm 3 \
+  --print-raw \
+  --year 2026
+```
+
+**Parameters**:
+- `--log-file`: Path to live syslog file
+- `--model-dir`: Trained model directory
+- `--window-sec`: Window size in seconds
+- `--k-confirm`: Consecutive confirmations
+- `--print-raw`: Print each window's prediction
+- `--year`: Year for syslog timestamps (if missing)
+
+**Alert Output**:
+```
+🚨 EARLY WARNING (confirmed=3) @ 2026-07-01 14:23:00 | score=0.892 | lines=47
+```
+
+---
+
+### Method 4: Step-by-Step Manual Pipeline
+
+For fine-grained control, run each step individually:
+
+#### Step 1: Generate Synthetic Log
+
+```bash
+python scripts/generate_synthetic_linux_log.py \
+  --lines 80000 \
+  --anomaly-frac 0.0015 \
+  --out raw_logs/test.log
+```
+
+#### Step 2: Convert to CSV
+
+```bash
+python src/linux/pipeline/step_01_convert_log_to_csv.py \
+  --log-path raw_logs/test.log \
+  --output data/linux/raw_csv/test.csv
+```
+
+#### Step 3: Windowize
+
+```bash
+python src/linux/pipeline/01_windowize.py \
+  --input data/linux/raw_csv/test.csv \
+  --output data/linux/processed/test_windowz.csv \
+  --window 60s
+```
+
+#### Step 4: Label Windows
+
+```bash
+python src/linux/pipeline/02_label_windows_from_rules.py \
+  --input data/linux/processed/test_windowz.csv \
+  --output data/linux/labeled/test_labeled.csv \
+  --text-col text_with_proc
+```
+
+#### Step 5: Add Trend Features (Optional)
+
+```bash
+python src/linux/pipeline/02b_add_trend_features.py \
+  --input data/linux/labeled/test_labeled.csv \
+  --output data/linux/labeled/test_trends.csv
+```
+
+#### Step 6: Create Future Labels
+
+```bash
+python src/linux/pipeline/03_make_future_labels.py \
+  --input data/linux/labeled/test_trends.csv \
+  --output data/linux/labeled/test_future.csv \
+  --horizon-min 15
+```
+
+#### Step 7: Train Model
+
+```bash
+python src/linux/pipeline/04_train_baseline.py \
+  --input data/linux/labeled/test_future.csv \
+  --model-dir models/linux/test_model \
+  --target-precision 0.80 \
+  --min-lines 5
+```
+
+#### Step 8: Calibrate Threshold
+
+```bash
+python scripts/calibrate_threshold.py \
+  --model-dir models/linux/test_model \
+  --k-confirm 3 \
+  --target-alerts-per-day 5
+```
+
+#### Step 9: Run Inference
+
+```bash
+python src/linux/pipeline/05_infer_baseline.py \
+  --input data/linux/labeled/test_trends.csv \
+  --model-dir models/linux/test_model \
+  --output outputs/linux/test_predictions.csv \
+  --min-lines 5 \
+  --k-confirm 3 \
+  --print-top 20
+```
+
+---
+
+## 🎯 Advanced Features
+
+### 1. Trend Features
+
+**What**: Rolling statistics and differentials for numeric features
+
+**Enabled with**: `--use-trends` or `-T` flag
+
+**Features Added**:
+- `<feature>_roll3_mean`: 3-window rolling average
+- `<feature>_roll6_sum`: 6-window rolling sum
+- `<feature>_diff1`: First-order difference (current - previous)
+
+**Impact**: Improves detection of gradual degradation patterns
+
+**Example**:
+```bash
+# With trends
+python scripts/00_run_linux_pipeline.py --use-trends ...
+
+# Without trends
+python scripts/00_run_linux_pipeline.py ...
+```
+
+---
+
+### 2. K-Consecutive Confirmation
+
+**What**: Require K consecutive positive predictions before alerting
+
+**Purpose**: Dramatically reduce false positives
+
+**How it works**:
+- Model predicts on each window
+- Alert only if last K predictions are ALL positive
+- Example: K=3 means 3 consecutive 60s windows = 3 minutes of sustained anomaly signal
+
+**Configuration**:
+- Training: `--k-confirm 3`
+- Inference: `--k-confirm 3`
+- Realtime: `-k 3`
+
+**Trade-off**:
+- Higher K → Fewer false positives, but slower detection
+- Lower K → Faster detection, but more false positives
+
+---
+
+### 3. Threshold Calibration
+
+**What**: Optimize decision threshold for operational constraints
+
+**Use Case**: "I want exactly 5 alerts per day on average"
+
+**Process**:
+1. Train model with initial threshold (based on precision target)
+2. Run calibration script on validation scores
+3. Search for threshold that produces target alert rate
+4. Save calibrated threshold to `threshold.txt`
+5. Re-run inference with calibrated threshold
+
+**Example Workflow**:
+```bash
+# 1. Train
+python scripts/00_run_linux_pipeline.py --target-precision 0.80 ...
+
+# 2. Calibrate for 5 alerts/day
+python scripts/calibrate_threshold.py \
+  --model-dir models/linux/baseline_combined_w60s_h15m \
+  --k-confirm 3 \
+  --target-alerts-per-day 5
+
+# 3. Re-run inference with calibrated threshold
+python src/linux/pipeline/05_infer_baseline.py \
+  --input data/linux/labeled/test_trends.csv \
+  --model-dir models/linux/baseline_combined_w60s_h15m \
+  --output outputs/linux/test_calibrated.csv \
+  --min-lines 5 \
+  --k-confirm 3
+```
+
+---
+
+### 4. Sequence Model (GRU)
+
+**What**: Optional LSTM/GRU model for temporal sequence learning
+
+**Status**: Experimental (baseline Logistic Regression is primary)
+
+**Enable with**: `--train-seq` flag
+
+**Parameters**:
+- `--seq-len 6`: Use 6 windows as input sequence
+
+**Example**:
+```bash
+python scripts/00_run_linux_pipeline.py \
+  --train-seq \
+  --seq-len 6 \
+  ...
+```
+
+---
+
+## ⚙️ Configuration Parameters
+
+### Window Sizes
+
+| Value | Description | Use Case |
+|-------|-------------|----------|
+| `30s` | 30 seconds | High-frequency monitoring |
+| `60s` | 1 minute | **Recommended default** |
+| `5min` | 5 minutes | Low-volume systems |
+| `15min` | 15 minutes | Coarse-grained analysis |
+
+### Prediction Horizons
+
+| Value | Description | Warning Time |
+|-------|-------------|--------------|
+| `5` | 5 minutes | Very short notice |
+| `10` | 10 minutes | Short notice |
+| `15` | **15 minutes** | **Recommended** |
+| `30` | 30 minutes | Long notice |
+| `60` | 1 hour | Very long notice |
+
+### Precision Targets
+
+| Value | False Positives | Recall | Use Case |
+|-------|-----------------|--------|----------|
+| `0.60` | Moderate | High | Development/testing |
+| `0.70` | Low | Moderate | Balanced production |
+| `0.80` | Very low | Lower | **Production (recommended)** |
+| `0.90` | Minimal | Low | Critical systems |
+
+### K-Confirm Values
+
+| Value | Detection Delay | False Positives | Use Case |
+|-------|-----------------|-----------------|----------|
+| `1` | Immediate | High | Testing only |
+| `2` | 2 windows | Moderate | Balanced |
+| `3` | **3 windows** | **Low** | **Recommended** |
+| `5` | 5 windows | Very low | Critical systems |
+
+### Min Lines Filter
+
+| Value | Description | Impact |
+|-------|-------------|--------|
+| `0` | No filter | More noise |
+| `3` | Ignore sparse windows | Balanced |
+| `5` | **Recommended** | **Fewer false positives** |
+| `10` | Strict filtering | May miss anomalies |
+
+---
+
+## 🔍 Understanding Outputs
+
+### Model Directory Structure
+
+```
+models/linux/baseline_combined_w60s_h15m/
+├── final_model.joblib      # Trained scikit-learn pipeline
+├── threshold.txt            # Decision threshold (e.g., 0.7234)
+├── metadata.json            # Training metadata
+├── metrics.txt              # Performance metrics
+├── val_scores.csv           # Validation predictions
+└── calibration.txt          # Calibration report (if calibrated)
+```
+
+### Prediction CSV Format
+
+**Columns**:
+- `bucket`: Time window (ISO format)
+- `early_warning_score`: Model probability (0.0-1.0)
+- `predict_raw`: Binary prediction before K-confirm (0/1)
+- `predict_confirmed`: Binary prediction after K-confirm (0/1)
+- `lines`: Number of log lines in window
+- `example_text`: Sample log text from window
+
+**Example**:
+```csv
+bucket,early_warning_score,predict_raw,predict_confirmed,lines,example_text
+2026-07-01T14:20:00,0.234567,0,0,23,CRON: Started session...
+2026-07-01T14:21:00,0.856234,1,0,45,sshd: Failed password for...
+2026-07-01T14:22:00,0.912345,1,0,52,sshd: Failed password for...
+2026-07-01T14:23:00,0.891234,1,1,47,sshd: authentication failure...
+```
+
+### Metrics File
+
+**Key Metrics**:
+- `pr_auc`: Precision-Recall AUC (0.0-1.0, higher is better)
+- `threshold`: Decision threshold
+- `confusion_matrix`: TP, FP, TN, FN counts
+- `precision`: Precision on test set
+- `recall`: Recall on test set
+- `f1-score`: F1 score
+
+**Example**:
+```
+pr_auc=0.8234
+threshold_policy=precision
+target_precision=0.80
+threshold=0.7234
+confusion_matrix=
+[[1234   45]
+ [  12  156]]
+
+              precision    recall  f1-score   support
+           0     0.9904    0.9648    0.9774      1279
+           1     0.7761    0.9286    0.8456       168
+```
+
+---
+
+## 🛠️ Troubleshooting
+
+### Issue: "Not running inside a virtualenv"
+
+**Solution**:
+```bash
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+```
+
+### Issue: "No CSV files found"
+
+**Cause**: Raw directory is empty or contains only `.log` files
+
+**Solution**: Use `--recursive` flag or ensure `.log` files are in `--raw-dir`
+
+### Issue: "Not enough data after filtering"
+
+**Cause**: `--min-lines` filter is too strict
+
+**Solution**: Lower `--min-lines` value or collect more logs
+
+### Issue: High False Positive Rate
+
+**Solutions**:
+1. Increase `--target-precision` (e.g., 0.80 → 0.90)
+2. Increase `--min-lines` (e.g., 3 → 5)
+3. Increase `--k-confirm` (e.g., 2 → 3)
+4. Run threshold calibration with lower `--target-alerts-per-day`
+
+### Issue: Missing Anomalies (Low Recall)
+
+**Solutions**:
+1. Decrease `--target-precision` (e.g., 0.80 → 0.70)
+2. Decrease `--k-confirm` (e.g., 3 → 2)
+3. Increase `--horizon-min` for longer warning time
+4. Add more diverse training data
+
+### Issue: Real-time Inference Not Detecting Anything
+
+**Checks**:
+1. Verify log file is being written to: `tail -f /var/log/syslog`
+2. Check model threshold: `cat models/.../threshold.txt`
+3. Verify window size matches training: `--window-sec 60`
+4. Enable `--print-raw` to see all predictions
+
+### Issue: "UnicodeDecodeError" when parsing logs
+
+**Solution**: Logs may contain non-UTF8 characters. The realtime script uses `errors='replace'` but batch scripts may need adjustment.
+
+---
+
+## 📊 Performance Tuning
+
+### For High Throughput Systems
+
+```bash
+# Use larger windows to reduce volume
+python scripts/00_run_linux_pipeline.py \
+  --window 5min \
+  --horizon-min 30 \
+  --min-lines 10 \
+  ...
+```
+
+### For Low Latency Detection
+
+```bash
+# Use smaller windows and shorter horizon
+python scripts/00_run_linux_pipeline.py \
+  --window 30s \
+  --horizon-min 5 \
+  --k-confirm 2 \
+  ...
+```
+
+### For Minimal False Positives
+
+```bash
+# Strict filtering and high precision
+python scripts/00_run_linux_pipeline.py \
+  --window 60s \
+  --horizon-min 15 \
+  --use-trends \
+  --target-precision 0.90 \
+  --min-lines 10 \
+  --k-confirm 5
+```
+
+---
+
+## 📈 Best Practices
+
+### 1. Training Data Quality
+
+- **Diversity**: Include logs from multiple time periods and system states
+- **Balance**: Ensure sufficient anomaly examples (aim for 1-5% anomaly rate)
+- **Realism**: Use real production logs when possible
+
+### 2. Model Retraining
+
+- **Frequency**: Retrain weekly or monthly as system behavior evolves
+- **Trigger**: Retrain when precision/recall degrades significantly
+- **Data**: Include recent logs to capture new patterns
+
+### 3. Alert Management
+
+- **Start Conservative**: Begin with high precision (0.80+) and K=3
+- **Monitor**: Track alert rate and false positive rate
+- **Iterate**: Adjust thresholds based on operational feedback
+
+### 4. Production Deployment
+
+- **Test First**: Run realtime replay on historical data
+- **Gradual Rollout**: Start with non-critical systems
+- **Monitoring**: Log all predictions for post-hoc analysis
+- **Alerting**: Integrate with existing alerting infrastructure (PagerDuty, Slack, etc.)
+
+---
+
+## 🎓 Example Workflows
+
+### Workflow 1: Quick Demo (5 minutes)
+
+```bash
+# 1. Activate environment
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+
+# 2. Run complete demo
+make demo
+```
+
+### Workflow 2: Production Training (30 minutes)
+
+```bash
+# 1. Collect production logs to raw_logs/
+cp /var/log/syslog* raw_logs/
+
+# 2. Train with production settings
+python scripts/00_run_linux_pipeline.py \
+  --raw-dir raw_logs \
+  --window 60s \
+  --horizon-min 15 \
+  --use-trends \
+  --target-precision 0.85 \
+  --min-lines 5 \
+  --k-confirm 3 \
+  --recursive
+
+# 3. Calibrate for 3 alerts/day
+python scripts/calibrate_threshold.py \
+  --model-dir models/linux/baseline_combined_w60s_h15m \
+  --k-confirm 3 \
+  --target-alerts-per-day 3
+
+# 4. Test on live logs
+python src/linux/realtime/08_realtime_infer_baseline.py \
+  --log-file /var/log/syslog \
+  --model-dir models/linux/baseline_combined_w60s_h15m \
+  --out outputs/linux/production.csv \
+  --window-sec 60 \
+  --k-confirm 3 \
+  --print-raw
+```
+
+### Workflow 3: Experimentation (Iterative)
+
+```bash
+# Try different configurations
+for PREC in 0.70 0.80 0.90; do
+  for K in 2 3 5; do
+    python scripts/00_run_linux_pipeline.py \
+      --raw-dir raw_logs \
+      --window 60s \
+      --horizon-min 15 \
+      --use-trends \
+      --target-precision $PREC \
+      --min-lines 5 \
+      --k-confirm $K \
+      --models-dir models/linux/exp_p${PREC}_k${K}
+  done
+done
+
+# Compare results
+ls -lh models/linux/exp_*/metrics.txt
+```
+
+---
+
+## 📞 Support & Resources
+
+### Documentation Files
+
+- [README.md](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/README.md): Quick start guide
+- [Makefile](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/Makefile): Automated targets
+
+### Key Scripts
+
+- [00_run_linux_pipeline.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/scripts/00_run_linux_pipeline.py): Full pipeline
+- [run_linux_single.sh](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/scripts/run_linux_single.sh): Single file pipeline
+- [realtime_runner.sh](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/scripts/realtime_runner.sh): Realtime demo
+
+### Pipeline Modules
+
+- [01_windowize.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/src/linux/pipeline/01_windowize.py): Time window aggregation
+- [04_train_baseline.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/src/linux/pipeline/04_train_baseline.py): Model training
+- [08_realtime_infer_baseline.py](file:///home/hackgodx/Study/SLIIT/RP%20code/Linux/log-forecast/src/linux/realtime/08_realtime_infer_baseline.py): Realtime inference
+
+---
+
+## 🎉 Summary
+
+This project provides a complete early warning system for Linux log anomalies with:
+
+✅ **Easy Setup**: Single virtualenv activation  
+✅ **Flexible Usage**: Makefile, scripts, or manual pipeline  
+✅ **Production Ready**: Calibration, K-confirm, trend features  
+✅ **Real-time Capable**: Live log monitoring with streaming inference  
+✅ **Well Documented**: Comprehensive guides and examples  
+
+**Recommended Starting Point**:
+```bash
+source "/home/hackgodx/Projects/RP/venv/bin/activate"
+make demo
+```
+
+This will generate synthetic data, train a model, calibrate thresholds, and run both batch and real-time inference demos.
+
+---
+
+*Report Generated: 2026-01-30*  
+*Project: Log Forecast — Linux Early Warning System*
